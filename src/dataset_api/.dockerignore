@@ -1,0 +1,5 @@
+**/__pycache__/
+**/*.pyc
+
+# Config injected at runtime via docker-compose volume
+source_config.json

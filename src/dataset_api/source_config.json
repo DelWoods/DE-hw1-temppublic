@@ -1,0 +1,13 @@
+{
+    "csv_path": "/app/data/dump_features_include_numeric_1.csv",
+    "sample_csv_path": "/app/data/sample_dump_features.csv",
+    "max_page_size": 10000,
+
+    "columns": [
+        "raw_text_id", "dataset_id", "source_platform", "is_verified",
+        "text_raw", "is_toxic", "toxicity_type",
+        "count_spp", "count_rpp", "count_profanity",
+        "has_emoji", "has_emoticon", "has_capslock", "is_all_lower",
+        "is_bad_word_incl", "has_url", "has_number", "has_mention", "has_hashtag"
+    ]
+}

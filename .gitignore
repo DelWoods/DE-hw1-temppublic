@@ -221,3 +221,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# hw-1: data is local only, except the small sample
+data/*
+!data/sample_dump_features.csv
+!data/Datasets.xlsx
+!data/screen.png
+!data/screenapi.png

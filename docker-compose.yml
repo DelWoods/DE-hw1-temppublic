@@ -1,0 +1,138 @@
+services:
+  # target db: messages from the notebook etl:
+  postgres:
+    image: postgres:16.6
+    container_name: postgres
+    env_file:
+      - .env
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      # creates schema + target tables on the first start:
+      - ./init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # local csv dump served as REST API (source of the etl):
+  dataset-api:
+    container_name: dataset-api
+    build:
+      context: ./src/dataset_api
+      dockerfile: Dockerfile
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./data:/app/data:ro
+      - ./src/dataset_api/source_config.json:/app/source_config.json:ro
+      - ./src/utils.py:/app/utils.py:ro
+      - ./src/logger.py:/app/logger.py:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      # full 830 Mb csv takes some time to read:
+      start_period: 60s
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.1
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    # persisted together with kafka_data, otherwise kafka cluster id mismatches on restart: 
+    volumes:
+      - zk_data:/var/lib/zookeeper/data
+      - zk_log:/var/lib/zookeeper/log
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: kafka
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      # two listeners: kafka:29092 inside docker (kafka-ui), localhost:9092 for the notebook:
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:29092,EXTERNAL://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:29092,EXTERNAL://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      # after a hard stop zookeeper keeps the old broker session for a while => short timeout + restart: 
+      KAFKA_ZOOKEEPER_SESSION_TIMEOUT_MS: 6000
+    restart: on-failure
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server kafka:29092 --list"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+    depends_on:
+      - zookeeper
+
+  # one-shot topic creation (cp-kafka has no KAFKA_CREATE_TOPICS):
+  kafka-init:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: kafka-init
+    command: >
+      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists
+      --topic api-source --partitions 1 --replication-factor 1
+      --config retention.ms=604800000
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+  # ui to review kafka insides:
+  kafka-ui:
+    image: provectuslabs/kafka-ui:v0.7.2
+    container_name: kafka-ui
+    ports:
+      - "8080:8080"
+    environment:
+      DYNAMIC_CONFIG_ENABLED: 'false'
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAP_SERVERS: kafka:29092
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+  # one-shot etl: runs notebooks/etl.ipynb inside docker, started by `docker compose run --rm etl`:
+  etl:
+    container_name: etl
+    build:
+      context: .
+      dockerfile: notebooks/Dockerfile
+    profiles: ["etl"]
+    volumes:
+      - .:/app
+    # docker network addresses instead of localhost from .env:
+    environment:
+      API_URL: http://dataset-api:8001
+      PG_HOST: postgres
+      KAFKA_BOOTSTRAP: kafka:29092
+    depends_on:
+      dataset-api:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+
+
+volumes:
+  pg_data:
+    driver: local
+  kafka_data:
+    driver: local
+  zk_data:
+    driver: local
+  zk_log:
+    driver: local

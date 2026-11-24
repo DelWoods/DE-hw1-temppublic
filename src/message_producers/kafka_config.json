@@ -1,0 +1,5 @@
+{
+    "kafka_bootstrap": "kafka:29092",
+    "kafka_retries": 5,
+    "kafka_retry_delay": 5
+}
